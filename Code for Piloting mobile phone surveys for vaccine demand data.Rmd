@@ -1,0 +1,372 @@
+---
+title: "BeSD Zambia Code"
+output: html_document
+date: "2025-03-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r read data set working directory set libraries, echo=FALSE}
+library(plyr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(tidyr)
+library(officer)
+library(rvg)
+library(gt)
+
+#set working directory
+setwd("~/Strategic Information activites/BeSD/BeSD Zambia/Data")
+
+#read in the 2021 data
+besd<-read.csv("Pilot testing new March database 20240729.csv")
+```
+
+Data cleaning
+```{r clean and transform data as needed, echo=FALSE}
+#make the incentive column a categorical variable
+  besd$mmi<-as.factor(besd$mmi)
+
+#fix the call to action column
+  besd$Calltoaction<-ifelse(besd$Calltoaction=="none"|
+                              besd$Calltoaction=="None",
+                            "No",
+                            besd$Calltoaction)
+
+#fix the multilangtime column
+  besd$Multilanguagetimes<-ifelse(besd$Multilanguagetimes == "Siingle",
+                                  "Single",
+                                  besd$Multilanguagetimes)
+
+#make a column that is district_rec_active if there is one but a3_district if not
+  besd$district_combo<-ifelse(besd$district_rec_active!="",
+                              besd$district_rec_active,
+                              besd$a3_district)
+
+#fix all those fours in the responses to likert scale qs
+  replace_patterns <- c("Don't know/not sure" = "A little",
+                        "No" = "Somewhat",
+                        "Yes"="Most",
+                        "4" = "Not at all")
+  besd <- besd %>%
+    mutate(a7_concern = str_replace_all(a7_concern, replace_patterns))%>%
+    mutate(a8_important = str_replace_all(a8_important, replace_patterns))%>%
+    mutate(a12_costly = str_replace_all(a12_costly, replace_patterns))
+  
+  # Reorder the factor levels
+  besd$a7_concern <- factor(besd$a7_concern, levels = c("Not at all", "A little", "Somewhat", "Most"))
+  besd$a8_important <- factor(besd$a8_important, levels = c("Not at all", "A little", "Somewhat", "Most"))
+  besd$a12_costly <- factor(besd$a12_costly, levels = c("Not at all", "A little", "Somewhat", "Most"))
+
+#new age categories
+  besd$agecat_new<-ifelse(besd$a1_agecat=="40-49"|
+                          besd$a1_agecat=="30-39",
+                          "30-49",
+                          besd$a1_agecat)
+    besd$agecat_new<-ifelse(besd$a1_agecat=="50-59"|
+                          besd$a1_agecat=="60-74" |
+                          besd$a1_agecat=="75 and above",
+                          "50+",
+                          besd$agecat_new)
+```
+
+
+```{r response rate, echo=FALSE}
+
+#Response rate by district
+  # Define response criteria at the row level
+  besd <- besd %>%
+    mutate(
+      Responded = case_when(
+        # People who responded, including those in Zamtel and non-Zamtel lists
+        statusPhoneNumber != "Recruitment sent; no response" ~ 1,  # Responded
+        TRUE ~ 0  # No response
+      )  )
+  
+  #Calculate stats
+  # select just columns we need 
+  anova_data <- besd %>%
+    select(statusPhoneNumber, Responded, district_combo)%>%
+    filter(district_combo!="")
+  
+  # Perform ANOVA on row-level data, checking if Responded differs by survPhase
+  anova_result <- aov(Responded ~ district_combo, data = anova_data)
+  summary(anova_result)
+  
+  # Perform Tukey's Honest Significant Difference (HSD) test for pairwise comparisons between survey phases
+  tukey_result <- TukeyHSD(anova_result)
+
+#Response rate by survey phase
+# Define response criteria at the row level
+  besd <- besd %>%
+    mutate(
+      Responded = case_when(
+        # People who responded, including those in Zamtel and non-Zamtel lists
+        statusPhoneNumber != "Recruitment sent; no response" ~ 1,  # Responded
+        TRUE ~ 0  # No response
+      ),
+      # Exclude these cases from the denominator but include them in the numerator
+      ExcludeFromDenominator = case_when(
+        statusPhoneNumber %in% c("Response: Zamtel list but no recruitment", 
+                                 "Response: non-Zamtel active number list or registration list") ~ 1,
+        TRUE ~ 0
+      )
+    )
+  
+  # Filter to include only rows for valid analysis (we exclude from denominator only)
+  anova_data <- besd %>%
+    select(statusPhoneNumber, Responded, survPhase, ExcludeFromDenominator)#%>%
+    #filter(ExcludeFromDenominator == 0)  # Keep only those who should be in denominator
+  
+  # Perform ANOVA on row-level data, checking if Responded differs by survPhase
+  anova_result <- aov(Responded ~ survPhase, data = anova_data)
+  summary(anova_result)
+  
+  # Perform Tukey's Honest Significant Difference (HSD) test for pairwise comparisons between survey phases
+  tukey_result <- TukeyHSD(anova_result)
+
+```
+
+```{r active vs passive responses by phase, echo=FALSE}
+#calculate stats
+  #pull out just columns I need
+  chisq_data<-besd%>%
+    select(survPhase, recruitStatus)%>%
+    filter(recruitStatus!="No response", na.rm = TRUE)
+  
+  #Phase One
+  chisq_mmiV<-filter(chisq_data,survPhase!="Survey: Jingle, no MMI")
+  
+  #Phase Two
+  chisq_jingleV<-filter(chisq_data,survPhase!="Survey: MMI, no jingle")
+  
+  #Run a Chi Squared for Phase One
+  # Create a contingency table
+  contingency_table <- table(chisq_mmiV$survPhase, 
+                             chisq_mmiV$recruitStatus == "Response; never recruitment")
+  
+  # Run the Chi-squared test
+  chisq_test <- chisq.test(contingency_table)
+  
+  # Display the results
+  print(chisq_test)
+  
+  #Run a Chi Squared for Phase Two
+  # Create a contingency table
+  contingency_table <- table(chisq_jingleV$survPhase, 
+                             chisq_jingleV$recruitStatus == "Response; never recruitment")
+  
+  # Run the Chi-squared test
+  chisq_test <- chisq.test(contingency_table)
+  
+  # Display the results
+  print(chisq_test)
+
+```
+
+```{r response rate by messaging strategy, echo=FALSE}
+
+#just the data we need
+anova_data<-besd%>%
+  filter(recruitStatus != "Response; never recruitment")%>%
+  select(Responded,
+         time1,Multilanguagetimes,Calltoaction,Modality, 
+         district_rec_active)
+
+########### morning vs evening
+# Perform ANOVA on row-level data, checking if Responded differs by survPhase
+anova_result <- aov(Responded ~ time1, 
+                    data = filter(anova_data,time1!=""))
+summary(anova_result)
+
+# Perform Tukey's Honest Significant Difference (HSD) test for pairwise comparisons between survey phases
+tukey_result <- TukeyHSD(anova_result)
+
+# Display Tukey HSD results
+print(tukey_result)
+
+########### one language vs multiple languages
+# Perform ANOVA on row-level data, checking if Responded differs by survPhase
+anova_result <- aov(Responded ~ Multilanguagetimes, 
+                    data = filter(anova_data,Multilanguagetimes!=""))
+summary(anova_result)
+
+# Perform Tukey's Honest Significant Difference (HSD) test for pairwise comparisons between survey phases
+tukey_result <- TukeyHSD(anova_result)
+
+# Display Tukey HSD results
+print(tukey_result)
+
+############ call to action message vs no call to action
+# Perform ANOVA on row-level data, checking if Responded differs by survPhase
+anova_result <- aov(Responded ~ Calltoaction, 
+                    data = filter(anova_data,Calltoaction!=""))
+summary(anova_result)
+
+# Perform Tukey's Honest Significant Difference (HSD) test for pairwise comparisons between survey phases
+tukey_result <- TukeyHSD(anova_result)
+
+# Display Tukey HSD results
+print(tukey_result)
+
+############ Modality SMS vs IVR
+# Perform ANOVA on row-level data, checking if Responded differs by survPhase
+anova_result <- aov(Responded ~ Modality, 
+                    data = filter(anova_data,Modality!="",
+                                  district_rec_active=="Chavuma"))
+summary(anova_result)
+
+# Perform Tukey's Honest Significant Difference (HSD) test for pairwise comparisons between survey phases
+tukey_result <- TukeyHSD(anova_result)
+
+# Display Tukey HSD results
+print(tukey_result)
+
+```
+
+
+
+```{r completion rate by phase, echo=FALSE}
+
+#calculate stats
+  # Filter to just respondents
+  Respondents <- filter(besd, statusPhoneNumber != "Recruitment sent; no response")
+  
+  anova_data<-Respondents%>%
+    select(a13_booster, mmi)%>%
+    mutate(CompleteSurvey = case_when(
+        a13_booster != "" ~ 1,  # Completed
+        TRUE ~ 0  # Didn't complete
+        ))
+  
+  # Perform ANOVA on row-level data, checking if Responded differs by survPhase
+  anova_result <- aov(CompleteSurvey ~ mmi, data = anova_data)
+  summary(anova_result)
+  
+  # Perform Tukey's Honest Significant Difference (HSD) test for pairwise comparisons between survey phases
+  tukey_result <- TukeyHSD(anova_result)
+  
+  # Display Tukey HSD results
+  print(tukey_result)
+
+```
+
+
+
+```{r respondent demographics, echo=FALSE}
+# Filter the data to include only respondents (Responded == 1)
+respondent_data <- filter(besd, Responded == 1)
+
+# Chi-squared test for gender (a2_gender)
+gender_table <- table(respondent_data$a2_gender)
+chi_gender <- chisq.test(gender_table)
+cat("Chi-squared test for gender (a2_gender):\n")
+print(chi_gender)
+
+# Chi-squared test for vaccination status (a5_c19vax)
+vax_status_table <- table(respondent_data$a5_c19vax)
+chi_vax_status <- chisq.test(vax_status_table)
+cat("\nChi-squared test for vaccination status (a5_c19vax):\n")
+print(chi_vax_status)
+
+# Chi-squared test for age group (agecat_new)
+age_group_table <- table(respondent_data$agecat_new)
+chi_age_group <- chisq.test(age_group_table)
+cat("\nChi-squared test for age group (a1_agecat):\n")
+print(chi_age_group)
+
+```
+
+
+Figure Two: Response rate by district
+```{r response rate by phase and district, echo=FALSE}
+
+#make combined district variable
+besd$district_combo<-ifelse(besd$district_rec_active=="", 
+                            besd$a3_district,
+                            besd$district_rec_active)
+
+# Calculate response rate by survey phase and district_rec_active
+response_rate_district <- besd %>%
+  filter(district_combo!="")%>%
+  group_by(district_combo) %>%
+  summarise(Total = sum(recruitStatus != "Response; never recruitment", na.rm = TRUE),
+            Responded = sum(
+              statusPhoneNumber != "Recruitment sent; no response", na.rm = TRUE)
+            ) %>%
+  mutate(ResponseRate = Responded / Total)
+
+# Calculate overall response rate by survey phase
+response_rate_overall <- besd %>%
+  summarise(Total = sum(recruitStatus != "Response; never recruitment", na.rm = TRUE),
+            Responded = sum(
+              statusPhoneNumber != "Recruitment sent; no response", na.rm = TRUE)
+            ) %>%
+  mutate(ResponseRate = Responded / Total, district_combo = "Overall")
+
+# Combine the district and overall data frames
+combined_response_rate_df <- bind_rows(response_rate_district, response_rate_overall) %>%
+  mutate(Label = paste0(round(ResponseRate * 100, 1), "% (", Responded, "/", Total, ")"))
+
+
+
+# Calculate the maximum y value to set the ylim
+max_response_rate <- max(combined_response_rate_df$ResponseRate) * 100
+
+# Plot using ggplot, faceting by district_rec_active
+p <- ggplot(combined_response_rate_df, aes(x = district_combo, y = ResponseRate * 100)) +
+  geom_col() +
+  geom_text(aes(label = Label), vjust = -0.5, size = 3.5) +
+  theme_bw(base_size = 16) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "District", y = "Response Rate (%)", title = "Response Rate by District") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0, max_response_rate * 1.1)) +
+  scale_fill_discrete(name = "District") 
+ 
+
+print(p)
+```
+
+
+Figure Three: Response rate per phase (pre mmi, mmi, community outreach)
+```{r Figure 1, echo=FALSE}
+# Calculate overall response rate by survey phase
+response_rate <- besd %>%
+  group_by(survPhase) %>%
+  summarise(Total = sum(recruitStatus != "Response; never recruitment", na.rm = TRUE),
+            Responded = sum(
+              recruitStatus!= "No response", na.rm = TRUE)
+            ) %>%
+  mutate(ResponseRate = Responded / Total, district_rec_active = "Overall")
+
+# Reorder survPhase levels and set custom x-axis labels with line breaks
+response_rate$survPhase <- factor(response_rate$survPhase, 
+                                              levels = c("Survey: no MMI, no jingle", 
+                                                         "Survey: MMI, no jingle", 
+                                                         "Survey: Jingle, no MMI"))
+response_rate<-response_rate%>%
+  mutate(Label = paste0(round(ResponseRate * 100, 1), "% (", Responded, "/", Total, ")"))
+
+# Calculate the maximum y value to set the ylim
+max_response_rate <- max(response_rate$ResponseRate) * 100
+
+# Plot using ggplot with custom x-axis labels and line breaks
+p <- ggplot(response_rate, aes(x = survPhase, y = ResponseRate * 100)) +
+  geom_col() +
+  geom_text(aes(label = Label), vjust = -0.5, size = 3.5) +
+  theme_bw(base_size = 16) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.5)) +  # No angle for x-axis labels
+  labs(x = "Survey Phase", y = "Response Rate (%)", title = "Response Rate per Survey Phase") +
+  scale_y_continuous(labels = scales::percent_format(scale = 1), limits = c(0, max_response_rate * 1.1)) +
+  scale_x_discrete(labels = c("Survey: no MMI, no jingle" = "Phase One\n(no incentive,\nno community outreach)",
+                              "Survey: MMI, no jingle" = "Phase Two\n(monetary incentive)",
+                              "Survey: Jingle, no MMI" = "Phase Three\n(community outreach)"))
+
+# Print the plot
+print(p)
+```
